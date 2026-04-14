@@ -19,6 +19,7 @@ pub mod recent_service;
 pub mod search_service;
 pub mod share_service;
 pub mod storage_usage_service;
+pub mod task_scheduler_service;
 pub mod trash_service;
 pub mod wopi_lock_service;
 pub mod wopi_token_service;

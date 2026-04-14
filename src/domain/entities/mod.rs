@@ -9,6 +9,7 @@ pub mod folder;
 pub mod playlist;
 pub mod session;
 pub mod share;
+pub mod task;
 pub mod trashed_item;
 pub mod user;
 

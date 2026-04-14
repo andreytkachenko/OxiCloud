@@ -13,6 +13,7 @@ use crate::application::dtos::settings_dto::{
 };
 use crate::application::ports::auth_ports::TokenServicePort;
 use crate::common::di::AppState;
+use crate::domain::entities::task::{ScheduledTask, TaskExecution};
 use crate::interfaces::errors::AppError;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -41,6 +42,15 @@ pub fn admin_routes() -> Router<Arc<AppState>> {
         .route("/settings/registration", put(set_registration_setting))
         // Audio metadata
         .route("/audio/metadata/reextract", post(reextract_audio_metadata))
+        // Tasks
+        .route("/tasks", get(list_tasks))
+        .route("/tasks/{id}", get(get_task))
+        .route("/tasks/{id}", put(update_task))
+        .route("/tasks/{id}/enable", post(enable_task))
+        .route("/tasks/{id}/disable", post(disable_task))
+        .route("/tasks/{id}/run", post(run_task_now))
+        .route("/tasks/{id}/executions", get(get_task_executions))
+        .route("/tasks/stats", get(get_task_stats))
 }
 
 /// Validate JWT and require admin role. Returns (user_id, role).
@@ -614,5 +624,216 @@ async fn reextract_audio_metadata(
         "total": result.total,
         "processed": result.processed,
         "failed": result.failed,
+    })))
+}
+
+// ============================================================================
+// Tasks Management
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct UpdateTaskDto {
+    enabled: Option<bool>,
+    trigger_type: Option<String>,
+    schedule_interval_seconds: Option<i32>,
+    schedule_time: Option<String>,
+    schedule_day_of_week: Option<i16>,
+    config: Option<serde_json::Value>,
+}
+
+async fn list_tasks(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let tasks: Vec<ScheduledTask> = task_service
+        .list_tasks()
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to list tasks: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "tasks": tasks,
+    })))
+}
+
+async fn get_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    let task: ScheduledTask = task_service
+        .get_task(id)
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to get task: {}", e)))?
+        .ok_or_else(|| AppError::not_found("Task not found"))?;
+
+    Ok(Json(task))
+}
+
+async fn update_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(dto): Json<UpdateTaskDto>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    task_service
+        .update_task(
+            id,
+            dto.enabled,
+            dto.trigger_type.as_deref(),
+            dto.schedule_interval_seconds,
+            dto.schedule_time.as_deref(),
+            dto.schedule_day_of_week,
+            dto.config.as_ref(),
+        )
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to update task: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Task updated successfully"
+    })))
+}
+
+async fn enable_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    task_service
+        .enable_task(id)
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to enable task: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Task enabled successfully"
+    })))
+}
+
+async fn disable_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    task_service
+        .disable_task(id)
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to disable task: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Task disabled successfully"
+    })))
+}
+
+async fn run_task_now(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    let execution_id = task_service
+        .run_task_now(id)
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to run task: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "message": "Task started",
+        "execution_id": execution_id
+    })))
+}
+
+async fn get_task_executions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let id = Uuid::parse_str(&id).map_err(|_| AppError::bad_request("Invalid UUID"))?;
+
+    let executions: Vec<TaskExecution> = task_service
+        .get_task_executions(id, 50)
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to get task executions: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "executions": executions,
+    })))
+}
+
+async fn get_task_stats(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, AppError> {
+    admin_guard(&state, &headers).await?;
+
+    let task_service = state
+        .task_scheduler_service
+        .as_ref()
+        .ok_or_else(|| AppError::internal_error("Task scheduler service not available"))?;
+
+    let stats = task_service
+        .get_task_stats()
+        .await
+        .map_err(|e| AppError::internal_error(format!("Failed to get task stats: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "total_audio_files": stats.total_audio_files,
+        "files_without_metadata": stats.files_without_metadata,
+        "files_with_metadata": stats.files_with_metadata,
     })))
 }

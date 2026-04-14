@@ -54,6 +54,9 @@
                     <button class="admin-tab" id="tab-btn-users">
                         <i class="fas fa-users"></i> <span data-i18n="admin.tab_users">Users</span>
                     </button>
+                    <button class="admin-tab" id="tab-btn-tasks">
+                        <i class="fas fa-tasks"></i> <span data-i18n="admin.tab_tasks">Tasks</span>
+                    </button>
                     <button class="admin-tab" id="tab-btn-oidc">
                         <i class="fas fa-key"></i> <span data-i18n="admin.tab_oidc">SSO / OIDC</span>
                     </button>
@@ -246,6 +249,29 @@
                                     <span data-i18n="admin.next">Next</span> <i class="fas fa-chevron-right"></i>
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="tab-tasks" class="tab-content">
+                    <div class="admin-card">
+                        <h2><i class="fas fa-tasks"></i> <span data-i18n="admin.task_management">Task Management</span></h2>
+                        <div id="task-stats" class="stats-grid" style="margin-bottom: 20px;">
+                            <div class="stat-card">
+                                <div class="stat-value" id="ts-total-audio">—</div>
+                                <div class="stat-label" data-i18n="admin.total_audio_files">Total Audio Files</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value text-blue" id="ts-with-metadata">—</div>
+                                <div class="stat-label" data-i18n="admin.with_metadata">With Metadata</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value text-orange" id="ts-missing-metadata">—</div>
+                                <div class="stat-label" data-i18n="admin.missing_metadata">Missing Metadata</div>
+                            </div>
+                        </div>
+                        <div id="tasks-list">
+                            <div class="table-loading-cell"><i class="fas fa-spinner fa-spin"></i> <span data-i18n="admin.loading_tasks">Loading tasks…</span></div>
                         </div>
                     </div>
                 </div>
@@ -592,6 +618,62 @@
                     >
                         <i class="fas fa-save"></i> <span data-i18n="admin.reset_btn">Reset</span>
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="task-edit-modal" class="modal-overlay hidden">
+            <div class="modal">
+                <h3><i class="fas fa-cog modal-title-icon"></i> <span data-i18n="admin.edit_task">Edit Task</span></h3>
+                <div id="task-edit-name" class="task-name-header"></div>
+                <div id="task-edit-description" class="task-description"></div>
+                <div class="form-group">
+                    <label data-i18n="admin.trigger_type">Trigger Type</label>
+                    <select id="te-trigger-type">
+                        <option value="manual" data-i18n="admin.trigger_manual">Manual (run on demand)</option>
+                        <option value="periodic" data-i18n="admin.trigger_periodic">Periodic (interval)</option>
+                        <option value="daily" data-i18n="admin.trigger_daily">Daily</option>
+                        <option value="weekly" data-i18n="admin.trigger_weekly">Weekly</option>
+                        <option value="on_upload" data-i18n="admin.trigger_on_upload">On File Upload</option>
+                    </select>
+                </div>
+                <div class="form-group" id="te-interval-group">
+                    <label data-i18n="admin.interval_seconds">Interval (seconds)</label>
+                    <input type="number" id="te-interval" min="60" step="60" value="86400" />
+                    <small data-i18n="admin.interval_hint">Minimum 60 seconds</small>
+                </div>
+                <div class="form-group" id="te-time-group" style="display: none;">
+                    <label data-i18n="admin.schedule_time">Schedule Time</label>
+                    <input type="time" id="te-time" value="02:00" />
+                </div>
+                <div class="form-group" id="te-day-group" style="display: none;">
+                    <label data-i18n="admin.day_of_week">Day of Week</label>
+                    <select id="te-day">
+                        <option value="0" data-i18n="admin.sunday">Sunday</option>
+                        <option value="1" data-i18n="admin.monday">Monday</option>
+                        <option value="2" data-i18n="admin.tuesday">Tuesday</option>
+                        <option value="3" data-i18n="admin.wednesday">Wednesday</option>
+                        <option value="4" data-i18n="admin.thursday">Thursday</option>
+                        <option value="5" data-i18n="admin.friday">Friday</option>
+                        <option value="6" data-i18n="admin.saturday">Saturday</option>
+                    </select>
+                </div>
+                <div id="te-error" class="alert alert-no-margin"></div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="btn-close-task-edit" data-i18n="admin.cancel">Cancel</button>
+                    <button class="btn btn-primary" id="btn-save-task"><i class="fas fa-save"></i> <span data-i18n="admin.save_btn">Save</span></button>
+                </div>
+            </div>
+        </div>
+
+        <div id="task-executions-modal" class="modal-overlay hidden">
+            <div class="modal modal-wide">
+                <h3><i class="fas fa-history modal-title-icon"></i> <span data-i18n="admin.task_history">Task Execution History</span></h3>
+                <div id="task-executions-list">
+                    <div class="table-loading-cell"><i class="fas fa-spinner fa-spin"></i> <span data-i18n="admin.loading_executions">Loading executions…</span></div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="btn-close-executions" data-i18n="admin.close">Close</button>
                 </div>
             </div>
         </div>

@@ -6,6 +6,7 @@ use crate::infrastructure::db::DbPools;
 
 use crate::application::services::admin_settings_service::AdminSettingsService;
 use crate::application::services::auth_application_service::AuthApplicationService;
+use crate::application::services::task_scheduler_service::TaskSchedulerService;
 
 use crate::application::ports::file_ports::FileUseCaseFactory;
 use crate::application::services::favorites_service::FavoritesService;
@@ -25,7 +26,7 @@ use crate::common::errors::DomainError;
 use crate::infrastructure::repositories::pg::SharePgRepository;
 use crate::infrastructure::repositories::pg::{
     FileBlobReadRepository, FileBlobWriteRepository, FileMetadataRepository, FolderDbRepository,
-    TrashDbRepository,
+    TaskPgRepository, TrashDbRepository,
 };
 use crate::infrastructure::services::file_content_cache::{
     FileContentCache, FileContentCacheConfig,
@@ -244,16 +245,27 @@ impl AppServiceFactory {
         repos: &RepositoryServices,
         trash_service: Option<Arc<TrashService>>,
         db_pool: &Arc<PgPool>,
+        audio_metadata_service: Option<Arc<AudioMetadataService>>,
     ) -> ApplicationServices {
         // Main services
         let folder_service = Arc::new(FolderService::new(repos.folder_repository.clone()));
 
         // Refactored services with all infrastructure ports
         // In blob model, dedup is handled by the repository — no separate write-behind needed
-        let file_upload_service = Arc::new(FileUploadService::new_with_read(
+        let mut file_upload_service = Arc::new(FileUploadService::new_with_read(
             repos.file_write_repository.clone(),
             repos.file_read_repository.clone(),
         ));
+
+        if let Some(audio_svc) = audio_metadata_service {
+            file_upload_service = Arc::new(
+                FileUploadService::new_with_read(
+                    repos.file_write_repository.clone(),
+                    repos.file_read_repository.clone(),
+                )
+                .with_audio_metadata_service(audio_svc),
+            );
+        }
 
         let file_retrieval_service = Arc::new(FileRetrievalService::new_with_cache(
             repos.file_read_repository.clone(),
@@ -485,9 +497,12 @@ impl AppServiceFactory {
         // 3. Trash service (needed before application services)
         let trash_service = self.create_trash_service(&repos, &core).await;
 
+        // 3.5 Audio metadata service (needed for file upload service)
+        let audio_metadata_service = self.create_audio_metadata_service(&pool);
+
         // 4. Application services (with trash already wired)
         let mut apps =
-            self.create_application_services(&core, &repos, trash_service.clone(), &pool);
+            self.create_application_services(&core, &repos, trash_service.clone(), &pool, audio_metadata_service.clone());
 
         // 5. Share service
         let share_service = self.create_share_service(&repos, &pool);
@@ -616,6 +631,9 @@ impl AppServiceFactory {
         let mut core = core;
         core.zip_service = Some(zip_service);
 
+        // 9. Save audio_metadata_service before moving apps
+        let audio_metadata_service = apps.audio_metadata_service.clone();
+
         // 9. Assemble final AppState
         let mut app_state = AppState {
             core,
@@ -645,6 +663,7 @@ impl AppServiceFactory {
             path_resolver: None,
             webdav_lock_store:
                 crate::infrastructure::services::webdav_lock_service::create_webdav_lock_store(),
+            task_scheduler_service: None,
         };
 
         // 9b. Wire admin settings service when auth is available
@@ -808,6 +827,15 @@ impl AppServiceFactory {
             tracing::info!("Music service initialized");
         }
 
+        // 10b. Wire Task Scheduler service
+        {
+            let task_repo: Arc<TaskPgRepository> = Arc::new(TaskPgRepository::new(pool.clone()));
+            let task_scheduler =
+                Arc::new(TaskSchedulerService::new(task_repo, audio_metadata_service));
+            app_state.task_scheduler_service = Some(task_scheduler);
+            tracing::info!("Task scheduler service initialized");
+        }
+
         // 11. Wire WOPI services if enabled
         if self.config.wopi.enabled {
             let discovery_url = &self.config.wopi.discovery_url;
@@ -948,6 +976,7 @@ pub struct AppState {
         Option<Arc<crate::infrastructure::services::path_resolver_service::PathResolverService>>,
     pub webdav_lock_store:
         Arc<crate::infrastructure::services::webdav_lock_service::WebDavLockStore>,
+    pub task_scheduler_service: Option<Arc<TaskSchedulerService>>,
 }
 
 // All AppState construction is done via struct literal in build_app_state().

@@ -23,6 +23,10 @@ impl AudioMetadataService {
         Self { pool, blob_root }
     }
 
+    pub fn blob_root(&self) -> &PathBuf {
+        &self.blob_root
+    }
+
     pub fn is_audio_file(mime_type: &str) -> bool {
         mime_type.starts_with("audio/")
     }

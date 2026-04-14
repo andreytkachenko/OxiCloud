@@ -8,6 +8,7 @@ use crate::application::services::storage_usage_service::StorageUsageService;
 use crate::common::errors::DomainError;
 use crate::infrastructure::repositories::pg::FileBlobReadRepository;
 use crate::infrastructure::repositories::pg::FileBlobWriteRepository;
+use crate::infrastructure::services::audio_metadata_service::AudioMetadataService;
 use tracing::{debug, info, warn};
 
 /// Helper function to extract username from folder path string.
@@ -48,6 +49,8 @@ pub struct FileUploadService {
     file_read: Option<Arc<FileBlobReadRepository>>,
     /// Optional storage usage tracking
     storage_usage_service: Option<Arc<StorageUsageService>>,
+    /// Optional audio metadata service for on-upload extraction
+    audio_metadata_service: Option<Arc<AudioMetadataService>>,
 }
 
 impl FileUploadService {
@@ -57,6 +60,7 @@ impl FileUploadService {
             file_write: file_repository,
             file_read: None,
             storage_usage_service: None,
+            audio_metadata_service: None,
         }
     }
 
@@ -69,7 +73,17 @@ impl FileUploadService {
             file_write,
             file_read: Some(file_read),
             storage_usage_service: None,
+            audio_metadata_service: None,
         }
+    }
+
+    /// Configures the audio metadata service
+    pub fn with_audio_metadata_service(
+        mut self,
+        audio_metadata_service: Arc<AudioMetadataService>,
+    ) -> Self {
+        self.audio_metadata_service = Some(audio_metadata_service);
+        self
     }
 
     /// Configures the storage usage service
@@ -104,6 +118,28 @@ impl FileUploadService {
             }
         }
     }
+
+    /// Optionally spawn background task to extract audio metadata
+    fn maybe_extract_audio_metadata(&self, file: &FileDto, content_type: &str) {
+        if let Some(audio_service) = &self.audio_metadata_service
+            && AudioMetadataService::is_audio_file(content_type)
+        {
+            let file_id = file.id.clone();
+            let audio_service_clone = Arc::clone(audio_service);
+            let blob_root = audio_service_clone.blob_root().clone();
+            tokio::spawn(async move {
+                let blob_path = {
+                    let prefix = &file_id[0..2];
+                    blob_root.join(prefix).join(format!("{}.blob", &file_id))
+                };
+                AudioMetadataService::spawn_extraction_background(
+                    audio_service_clone,
+                    uuid::Uuid::parse_str(&file_id).unwrap_or_default(),
+                    blob_path,
+                );
+            });
+        }
+    }
 }
 
 impl FileUploadUseCase for FileUploadService {
@@ -125,7 +161,7 @@ impl FileUploadUseCase for FileUploadService {
             .save_file_from_temp(
                 name.clone(),
                 folder_id,
-                content_type,
+                content_type.clone(),
                 temp_path,
                 size,
                 pre_computed_hash,
@@ -137,6 +173,8 @@ impl FileUploadUseCase for FileUploadService {
             name, size, dto.id
         );
         self.maybe_update_storage_usage(&dto);
+        let content_type_clone = content_type.clone();
+        self.maybe_extract_audio_metadata(&dto, &content_type_clone);
         Ok(dto)
     }
 

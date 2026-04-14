@@ -240,6 +240,10 @@ const multiSelect = {
             </div>
             <div class="batch-selection-info">
                 <div class="batch-bar-actions">
+                    <button class="batch-btn" id="batch-playlist" title="Add to Playlist" data-i18n-title="music.add_to_playlist">
+                        <i class="fas fa-compact-disc"></i>
+                        <span data-i18n="music.add_to_playlist">Add to Playlist</span>
+                    </button>
                     <button class="batch-btn" id="batch-fav" title="Add to favorites" data-i18n-title="batch.add_favorites">
                         <i class="fas fa-star"></i>
                         <span data-i18n="batch.add_favorites">Add to favorites</span>
@@ -298,11 +302,13 @@ const multiSelect = {
         const move = document.getElementById('batch-move');
         const dl = document.getElementById('batch-download');
         const fav = document.getElementById('batch-fav');
+        const playlist = document.getElementById('batch-playlist');
         const closeBtn = document.getElementById('batch-grid-close');
         if (del) del.onclick = () => this.batchDelete();
         if (move) move.onclick = () => this.batchMove();
         if (dl) dl.onclick = () => this.batchDownload();
         if (fav) fav.onclick = () => this.batchFavorites();
+        if (playlist) playlist.onclick = () => this.batchPlaylist();
         if (closeBtn) closeBtn.onclick = () => this.clear();
     },
 
@@ -480,6 +486,37 @@ const multiSelect = {
         } catch (e) {
             console.error('Batch favorites error:', e);
             window.ui.showNotification('Error', 'Could not add items to favorites');
+        }
+    },
+
+    /** Batch add to playlist — show playlist selection dialog for audio files */
+    async batchPlaylist() {
+        const items = this.items;
+        if (items.length === 0) return;
+
+        const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma', 'opus'];
+        const audioFiles = items.filter((i) => {
+            if (i.type !== 'file') return false;
+            const ext = (i.name.split('.').pop() || '').toLowerCase();
+            return audioExtensions.includes(ext);
+        });
+
+        if (audioFiles.length === 0) {
+            window.ui.showNotification('Add to Playlist', 'No audio files selected');
+            return;
+        }
+
+        if (window.contextMenus && typeof window.contextMenus.showPlaylistDialog === 'function') {
+            const mockFile = {
+                id: audioFiles[0].id,
+                name: audioFiles.length === 1 ? audioFiles[0].name : `${audioFiles.length} audio files`
+            };
+            window.contextMenus.showPlaylistDialog(mockFile);
+            window.app.playlistDialogFiles = audioFiles;
+            const filesInfo = document.getElementById('playlist-dialog-files-info');
+            if (filesInfo) {
+                filesInfo.innerHTML = `<strong>${window.i18n ? window.i18n.t('music.selected_files', 'Selected:') : 'Selected:'} </strong>${audioFiles.length} ${audioFiles.length === 1 ? 'audio file' : 'audio files'}`;
+            }
         }
     },
 

@@ -134,6 +134,7 @@ function switchTab(name, el) {
     activeTabName = name;
     if (name === 'users') loadUsers();
     if (name === 'dashboard') loadDashboard();
+    if (name === 'tasks') loadTasks();
 }
 
 async function loadDashboard() {
@@ -593,6 +594,349 @@ async function toggleRegistration(enabled) {
     }
 }
 
+// ============================================================================
+// Tasks Management
+// ============================================================================
+
+let currentEditingTask = null;
+
+async function loadTasks() {
+    const container = document.getElementById('tasks-list');
+    container.innerHTML = `<div class="table-loading-cell"><i class="fas fa-spinner fa-spin"></i> ${escapeHtml(t('admin.loading_tasks'))}</div>`;
+
+    try {
+        const resp = await fetch(`${API}/admin/tasks`, {
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (!resp.ok) {
+            container.innerHTML = `<div class="table-status-error"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(t('admin.failed_load_tasks'))}</div>`;
+            return;
+        }
+        const data = await resp.json();
+        const tasks = data.tasks;
+
+        if (!tasks || tasks.length === 0) {
+            container.innerHTML = `<div class="table-status-empty">${escapeHtml(t('admin.no_tasks_found'))}</div>`;
+            return;
+        }
+
+        container.innerHTML = tasks.map((task) => renderTaskCard(task)).join('');
+
+        // Wire up task action buttons
+        container.querySelectorAll('.task-action-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.action;
+                const taskId = btn.dataset.taskId;
+                if (action === 'edit') openTaskEditModal(taskId);
+                else if (action === 'enable') toggleTaskEnabled(taskId, true);
+                else if (action === 'disable') toggleTaskEnabled(taskId, false);
+                else if (action === 'run') runTaskNow(taskId);
+                else if (action === 'history') showTaskExecutions(taskId);
+            });
+        });
+
+        // Load task stats
+        loadTaskStats();
+    } catch (e) {
+        container.innerHTML = `<div class="table-status-error"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(t('admin.error_network', { message: e.message }))}</div>`;
+    }
+}
+
+function renderTaskCard(task) {
+    const statusClass = getTaskStatusClass(task.status);
+    const statusLabel = getTaskStatusLabel(task.status);
+    const scheduleLabel = getScheduleLabel(task);
+    const lastRun = task.last_run_at ? timeAgo(task.last_run_at) : t('admin.never');
+    const nextRun = task.next_run_at ? timeAgo(task.next_run_at) : t('admin.not_scheduled');
+
+    const editBtn =
+        task.trigger_type !== 'manual'
+            ? `<button class="btn btn-sm btn-secondary task-action-btn" data-action="edit" data-task-id="${task.id}" title="${escapeHtml(t('admin.edit_task_title'))}"><i class="fas fa-cog"></i></button>`
+            : '';
+
+    const enableDisableBtn =
+        task.status === 'active' || task.status === 'running'
+            ? `<button class="btn btn-sm btn-danger task-action-btn" data-action="disable" data-task-id="${task.id}" title="${escapeHtml(t('admin.disable_task_title'))}"><i class="fas fa-pause"></i></button>`
+            : `<button class="btn btn-sm btn-success task-action-btn" data-action="enable" data-task-id="${task.id}" title="${escapeHtml(t('admin.enable_task_title'))}"><i class="fas fa-play"></i></button>`;
+
+    return `
+        <div class="task-card">
+            <div class="task-header">
+                <div class="task-info">
+                    <div class="task-name">${escapeHtml(task.name)}</div>
+                    <div class="task-description-text">${escapeHtml(task.description || '')}</div>
+                </div>
+                <span class="task-badge ${statusClass}">${statusLabel}</span>
+            </div>
+            <div class="task-actions">
+                ${editBtn}
+                ${enableDisableBtn}
+                <button class="btn btn-sm btn-primary task-action-btn" data-action="run" data-task-id="${task.id}" title="${escapeHtml(t('admin.run_now_title'))}"><i class="fas fa-play"></i> <span>${escapeHtml(t('admin.run_now'))}</span></button>
+                <button class="btn btn-sm btn-secondary task-action-btn" data-action="history" data-task-id="${task.id}" title="${escapeHtml(t('admin.view_history_title'))}"><i class="fas fa-history"></i></button>
+            </div>
+            <div class="task-stats-row">
+                <div class="task-stat"><i class="fas fa-calendar"></i> <span>${escapeHtml(t('admin.schedule'))}:</span> <span class="task-stat-value">${escapeHtml(scheduleLabel)}</span></div>
+                <div class="task-stat"><i class="fas fa-clock"></i> <span>${escapeHtml(t('admin.last_run'))}:</span> <span class="task-stat-value">${escapeHtml(lastRun)}</span></div>
+                <div class="task-stat"><i class="fas fa-forward"></i> <span>${escapeHtml(t('admin.next_run'))}:</span> <span class="task-stat-value">${escapeHtml(nextRun)}</span></div>
+                <div class="task-stat"><i class="fas fa-check"></i> <span>${escapeHtml(t('admin.total_runs'))}:</span> <span class="task-stat-value">${task.total_runs}</span></div>
+            </div>
+        </div>
+    `;
+}
+
+function getTaskStatusClass(status) {
+    switch (status) {
+        case 'active':
+            return 'task-badge-active';
+        case 'inactive':
+            return 'task-badge-inactive';
+        case 'running':
+            return 'task-badge-running';
+        case 'completed':
+            return 'task-badge-completed';
+        case 'failed':
+            return 'task-badge-failed';
+        default:
+            return 'task-badge-inactive';
+    }
+}
+
+function getTaskStatusLabel(status) {
+    switch (status) {
+        case 'active':
+            return t('admin.active');
+        case 'inactive':
+            return t('admin.inactive');
+        case 'running':
+            return t('admin.running');
+        case 'completed':
+            return t('admin.completed');
+        case 'failed':
+            return t('admin.failed');
+        default:
+            return status;
+    }
+}
+
+function getScheduleLabel(task) {
+    switch (task.trigger_type) {
+        case 'manual':
+            return t('admin.schedule_manual');
+        case 'periodic':
+            return `${task.schedule_interval_seconds}s`;
+        case 'daily':
+            return `${t('admin.daily')} @ ${task.schedule_time || '02:00'}`;
+        case 'weekly':
+            return `${t('admin.weekly')} @ ${task.schedule_time || '02:00'}`;
+        default:
+            return task.trigger_type;
+    }
+}
+
+async function loadTaskStats() {
+    try {
+        const resp = await fetch(`${API}/admin/tasks/stats`, {
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (!resp.ok) return;
+        const stats = await resp.json();
+        document.getElementById('ts-total-audio').textContent = stats.total_audio_files;
+        document.getElementById('ts-with-metadata').textContent = stats.files_with_metadata;
+        document.getElementById('ts-missing-metadata').textContent = stats.files_without_metadata;
+    } catch (e) {
+        console.error('Failed to load task stats:', e);
+    }
+}
+
+let taskToToggle = null;
+
+async function toggleTaskEnabled(taskId, enable) {
+    const endpoint = enable ? `${API}/admin/tasks/${taskId}/enable` : `${API}/admin/tasks/${taskId}/disable`;
+    try {
+        const resp = await fetch(endpoint, {
+            method: 'POST',
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            loadTasks();
+        } else {
+            const e = await resp.json().catch(() => ({}));
+            alert(e.message || t('admin.error_generic'));
+        }
+    } catch (e) {
+        alert(t('admin.error_network', { message: e.message }));
+    }
+}
+
+async function runTaskNow(taskId) {
+    try {
+        const resp = await fetch(`${API}/admin/tasks/${taskId}/run`, {
+            method: 'POST',
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (resp.ok) {
+            alert(t('admin.task_started'));
+            loadTasks();
+        } else {
+            const e = await resp.json().catch(() => ({}));
+            alert(e.message || t('admin.error_generic'));
+        }
+    } catch (e) {
+        alert(t('admin.error_network', { message: e.message }));
+    }
+}
+
+async function openTaskEditModal(taskId) {
+    try {
+        const resp = await fetch(`${API}/admin/tasks/${taskId}`, {
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (!resp.ok) {
+            alert(t('admin.error_generic'));
+            return;
+        }
+        const task = await resp.json();
+        currentEditingTask = task;
+
+        document.getElementById('task-edit-name').textContent = task.name;
+        document.getElementById('task-edit-description').textContent = task.description || '';
+
+        // Handle trigger_type - could be string or object like {"Manual": null}
+        let scheduleType = task.trigger_type;
+        if (typeof scheduleType === 'object') {
+            // Handle Serde internal representation
+            scheduleType = Object.keys(scheduleType)[0].toLowerCase();
+        }
+
+        const select = document.getElementById('te-trigger-type');
+        select.value = scheduleType || 'manual';
+        document.getElementById('te-interval').value = task.schedule_interval_seconds || 86400;
+        document.getElementById('te-time').value = task.schedule_time || '02:00';
+        document.getElementById('te-day').value = task.schedule_day_of_week || 0;
+        document.getElementById('te-error').className = 'alert';
+        document.getElementById('te-error').textContent = '';
+
+        updateScheduleFieldsVisibility();
+        showElement('task-edit-modal', 'flex');
+    } catch (e) {
+        alert(t('admin.error_network', { message: e.message }));
+    }
+}
+
+function updateScheduleFieldsVisibility() {
+    const triggerType = document.getElementById('te-trigger-type').value;
+    const intervalGroup = document.getElementById('te-interval-group');
+    const timeGroup = document.getElementById('te-time-group');
+    const dayGroup = document.getElementById('te-day-group');
+
+    // Hide schedule fields for manual and on_upload triggers
+    const isScheduleBased = triggerType === 'periodic' || triggerType === 'daily' || triggerType === 'weekly';
+    intervalGroup.style.display = triggerType === 'periodic' ? 'block' : 'none';
+    timeGroup.style.display = triggerType === 'daily' || triggerType === 'weekly' ? 'block' : 'none';
+    dayGroup.style.display = triggerType === 'weekly' ? 'block' : 'none';
+}
+
+function closeTaskEditModal() {
+    currentEditingTask = null;
+    hideElement('task-edit-modal');
+}
+
+async function saveTaskEdit() {
+    if (!currentEditingTask) return;
+
+    const triggerType = document.getElementById('te-trigger-type').value;
+    const interval = parseInt(document.getElementById('te-interval').value) || 86400;
+    const time = document.getElementById('te-time').value;
+    const day = parseInt(document.getElementById('te-day').value) || 0;
+
+    // Validate interval for periodic triggers
+    if (triggerType === 'periodic' && interval < 60) {
+        document.getElementById('te-error').textContent = t('admin.interval_min_error');
+        document.getElementById('te-error').className = 'alert alert-error';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${API}/admin/tasks/${currentEditingTask.id}`, {
+            method: 'PUT',
+            headers: headers(),
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                trigger_type: triggerType,
+                schedule_interval_seconds: triggerType === 'periodic' ? interval : null,
+                schedule_time: triggerType === 'daily' || triggerType === 'weekly' ? time : null,
+                schedule_day_of_week: triggerType === 'weekly' ? day : null
+            })
+        });
+
+        if (resp.ok) {
+            closeTaskEditModal();
+            loadTasks();
+        } else {
+            const e = await resp.json().catch(() => ({}));
+            document.getElementById('te-error').textContent = e.message || t('admin.error_generic');
+            document.getElementById('te-error').className = 'alert alert-error';
+        }
+    } catch (e) {
+        document.getElementById('te-error').textContent = t('admin.error_network', { message: e.message });
+        document.getElementById('te-error').className = 'alert alert-error';
+    }
+}
+
+let currentTaskForExecutions = null;
+
+async function showTaskExecutions(taskId) {
+    currentTaskForExecutions = taskId;
+    const container = document.getElementById('task-executions-list');
+    container.innerHTML = `<div class="table-loading-cell"><i class="fas fa-spinner fa-spin"></i> ${escapeHtml(t('admin.loading_executions'))}</div>`;
+    showElement('task-executions-modal', 'flex');
+
+    try {
+        const resp = await fetch(`${API}/admin/tasks/${taskId}/executions`, {
+            headers: headers(),
+            credentials: 'same-origin'
+        });
+        if (!resp.ok) {
+            container.innerHTML = `<div class="table-status-error"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(t('admin.error_generic'))}</div>`;
+            return;
+        }
+        const data = await resp.json();
+        const executions = data.executions;
+
+        if (!executions || executions.length === 0) {
+            container.innerHTML = `<div class="table-status-empty">${escapeHtml(t('admin.no_executions'))}</div>`;
+            return;
+        }
+
+        container.innerHTML = executions
+            .map(
+                (exec) => `
+            <div class="execution-item">
+                <div class="execution-header">
+                    <span class="execution-time">${new Date(exec.started_at).toLocaleString()}</span>
+                    <span class="task-badge ${getTaskStatusClass(exec.status)}">${getTaskStatusLabel(exec.status)}</span>
+                </div>
+                <div class="execution-message">${escapeHtml(exec.message || exec.error_details || t('admin.no_message'))}</div>
+                ${exec.duration_secs ? `<div class="execution-time">${exec.duration_secs}s</div>` : ''}
+            </div>
+        `
+            )
+            .join('');
+    } catch (e) {
+        container.innerHTML = `<div class="table-status-error"><i class="fas fa-exclamation-circle"></i> ${escapeHtml(t('admin.error_network', { message: e.message }))}</div>`;
+    }
+}
+
+function closeExecutionsModal() {
+    hideElement('task-executions-modal');
+    currentTaskForExecutions = null;
+}
+
 document.getElementById('oidc-enabled').addEventListener('change', function () {
     if (this.checked) showElement('oidc-form');
     else hideElement('oidc-form');
@@ -768,6 +1112,9 @@ document.getElementById('tab-btn-dashboard').addEventListener('click', function 
 document.getElementById('tab-btn-users').addEventListener('click', function () {
     switchTab('users', this);
 });
+document.getElementById('tab-btn-tasks').addEventListener('click', function () {
+    switchTab('tasks', this);
+});
 document.getElementById('tab-btn-oidc').addEventListener('click', function () {
     switchTab('oidc', this);
 });
@@ -793,3 +1140,9 @@ document.getElementById('cu-submit').addEventListener('click', submitCreateUser)
 
 document.getElementById('btn-close-reset-pw').addEventListener('click', closeResetPasswordModal);
 document.getElementById('rp-submit').addEventListener('click', submitResetPassword);
+
+// Tasks
+document.getElementById('te-trigger-type').addEventListener('change', updateScheduleFieldsVisibility);
+document.getElementById('btn-close-task-edit').addEventListener('click', closeTaskEditModal);
+document.getElementById('btn-save-task').addEventListener('click', saveTaskEdit);
+document.getElementById('btn-close-executions').addEventListener('click', closeExecutionsModal);
